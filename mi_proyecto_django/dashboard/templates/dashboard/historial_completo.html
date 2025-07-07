@@ -1,0 +1,18 @@
+{% if datos %}
+<div class="indicadores-historial" style="margin-bottom: 15px;">
+    <b>{{ filtro }}</b>
+    <ul>
+        <li><b>Máximo:</b> {{ stats.maximo }}</li>
+        <li><b>Mínimo:</b> {{ stats.minimo }}</li>
+        <li><b>Promedio:</b> {{ stats.promedio|floatformat:2 }}</li>
+        <li><b>Último valor:</b> {{ stats.ultimo }}</li>
+    </ul>
+</div>
+<div style="background:#fff;padding:20px;border-radius:12px;margin-bottom:20px;">
+    <h3>Gráfico de Humedad</h3>
+    <canvas id="graficoHistorial" style="width:100%;max-width:900px;height:300px;"></canvas>
+</div>
+{{ grafico|json_script:"grafico-historial" }}
+{% else %}
+<p>No hay datos para el filtro seleccionado.</p>
+{% endif %}
