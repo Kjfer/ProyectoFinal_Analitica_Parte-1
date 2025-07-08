@@ -2,52 +2,190 @@
 """
 Sistema integrado que combina el análisis de ML con el chatbot de WhatsApp
 para DryWall Alert con detección inteligente de anomalías
+
+Este módulo implementa la integración en tiempo real del sistema:
+1. Carga modelos de ML entrenados previamente
+2. Recibe datos en tiempo real del sensor de humedad
+3. Aplica algoritmos de ML para detectar anomalías
+4. Genera alertas inteligentes con análisis de confianza
+5. Se integra con el sistema de mensajería WhatsApp
+
+El objetivo es reemplazar alertas simples por umbral con un sistema
+inteligente que reduce falsas alarmas y mejora la detección.
 """
 
-import pandas as pd
-import numpy as np
-import pickle
-import time
-from datetime import datetime
-import os
+# Librerías para análisis de datos y machine learning
+import pandas as pd  # Manipulación de datos estructurados
+import numpy as np   # Operaciones matemáticas y arrays
+import pickle        # Serialización para guardar/cargar modelos entrenados
+import time          # Control de tiempo para monitoreo continuo
+from datetime import datetime  # Manejo de timestamps y fechas
+import os            # Interacción con sistema operativo (variables de entorno)
+
+# Algoritmos de ML específicos utilizados en el sistema integrado
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+# - RandomForest: Mejor modelo supervisado según análisis comparativo
+# - IsolationForest: Mejor modelo de detección de anomalías no supervisado
+
+from sklearn.preprocessing import StandardScaler  # Normalización de datos
+from sklearn.model_selection import train_test_split  # División de datos
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore')  # Suprimir advertencias para output limpio
 
 class SmartDryWallDetector:
+    """
+    Detector inteligente de filtraciones usando Machine Learning en tiempo real.
+    
+    Esta clase encapsula toda la lógica de detección inteligente:
+    - Entrena modelos ML con datos históricos
+    - Guarda/carga modelos para uso persistente
+    - Analiza lecturas en tiempo real del sensor
+    - Combina múltiples algoritmos para mayor precisión
+    - Genera alertas contextualizadas con niveles de confianza
+    
+    Flujo de funcionamiento:
+    1. Entrenamiento inicial con datos históricos (train_models)
+    2. Persistencia de modelos entrenados (save/load_models)
+    3. Análisis en tiempo real de cada lectura (predict_anomaly)
+    4. Generación de alertas inteligentes (generate_alert_message)
+    5. Monitoreo continuo integrado (continuous_monitoring)
+    
+    Algoritmos utilizados:
+    - RandomForest: Clasificación supervisada principal
+    - IsolationForest: Detección de anomalías no supervisada
+    - Combinación híbrida para mayor robustez
+    """
+    
     def __init__(self, data_file='humedad_datos.csv'):
         """
-        Detector inteligente de filtraciones usando Machine Learning
+        Inicializa el detector inteligente de filtraciones.
+        
+        Args:
+            data_file (str): Archivo CSV con datos históricos del sensor
+            
+        Atributos:
+            data_file: Ruta a datos históricos para entrenamiento
+            model: Clasificador Random Forest (modelo supervisado principal)
+            anomaly_detector: Isolation Forest (detector de anomalías no supervisado)
+            scaler: Normalizador de características para consistencia
+            is_trained: Flag que indica si los modelos están entrenados
+            threshold_basic: Umbral básico de respaldo (50% humedad)
         """
         self.data_file = data_file
-        self.model = None
-        self.anomaly_detector = None
-        self.scaler = StandardScaler()
-        self.is_trained = False
-        self.threshold_basic = 50  # Umbral básico original
+        
+        # Modelos de Machine Learning
+        self.model = None              # Random Forest para clasificación
+        self.anomaly_detector = None   # Isolation Forest para anomalías
+        self.scaler = StandardScaler() # Normalizador de datos
+        
+        # Estado del sistema
+        self.is_trained = False        # ¿Modelos entrenados?
+        self.threshold_basic = 50      # Umbral de respaldo (humedad %)
+        
+        print("🤖 Smart DryWall Detector inicializado")
+        print(f"📂 Datos de entrenamiento: {data_file}")
+        print(f"⚙️ Umbral básico de respaldo: {self.threshold_basic}%")
         
     def train_models(self):
         """
-        Entrena los modelos de ML con los datos históricos
+        Entrena los modelos de ML con datos históricos del sensor.
+        
+        Este método implementa el pipeline completo de entrenamiento:
+        1. Carga datos históricos desde CSV
+        2. Realiza feature engineering (extracción de características)
+        3. Prepara datos (normalización, división)
+        4. Entrena dos modelos complementarios:
+           - Random Forest: Supervisado (usa etiquetas conocidas)
+           - Isolation Forest: No supervisado (detecta patrones anómalos)
+        5. Evalúa el rendimiento en datos de prueba
+        6. Persiste modelos para uso futuro
+        
+        La combinación de ambos modelos permite:
+        - Mayor robustez en la detección
+        - Validación cruzada entre enfoques
+        - Reducción de falsas alarmas
         """
         print("🧠 Entrenando modelos de Machine Learning...")
+        print("📊 Cargando datos históricos para aprendizaje...")
         
-        # Cargar datos
+        # Cargar y preparar datos históricos
         df = pd.read_csv(self.data_file)
+        print(f"✅ {len(df)} registros históricos cargados")
         
-        # Crear features
+        # Feature Engineering: Crear características temporales
+        # El análisis temporal puede revelar patrones de filtración
+        # Ejemplo: filtraciones más comunes en ciertos horarios
         df['hour'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S').dt.hour
         df['minute'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S').dt.minute
+        
+        # Crear variable objetivo basada en umbral validado
+        # 50% de humedad es el punto crítico según estándares de construcción
         df['is_anomaly'] = (df['humidity_pct'] > self.threshold_basic).astype(int)
         
-        # Preparar datos
-        X = df[['raw', 'humidity_pct', 'hour', 'minute']]
-        y = df['is_anomaly']
+        print(f"🎯 Casos normales: {(df['is_anomaly'] == 0).sum()}")
+        print(f"🚨 Casos anómalos: {(df['is_anomaly'] == 1).sum()}")
+        print(f"📊 Tasa de anomalías: {df['is_anomaly'].mean():.2%}")
         
-        # Normalizar
+        # Preparar características para entrenamiento
+        # Incluimos tanto valores raw como porcentajes y contexto temporal
+        feature_columns = ['raw', 'humidity_pct', 'hour', 'minute']
+        X = df[feature_columns]  # Matriz de características
+        y = df['is_anomaly']     # Vector de etiquetas objetivo
+        
+        # Normalización crítica para algoritmos ML
+        # Asegura que todas las características tengan la misma escala
         X_scaled = self.scaler.fit_transform(X)
+        print("📏 Datos normalizados (media=0, desviación=1)")
+        
+        # División estratificada para mantener proporción de clases
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y, 
+            test_size=0.3,      # 30% para evaluación
+            random_state=42,    # Reproducibilidad
+            stratify=y          # Mantener proporción de anomalías
+        )
+        
+        print(f"📚 Datos entrenamiento: {len(X_train)} muestras")
+        print(f"🧪 Datos evaluación: {len(X_test)} muestras")
+        
+        # ENTRENAMIENTO MODELO 1: Random Forest (Supervisado)
+        # Aprende de ejemplos etiquetados históricos
+        print("\n🌳 Entrenando Random Forest (clasificación supervisada)...")
+        self.model = RandomForestClassifier(
+            n_estimators=100,     # 100 árboles para robustez
+            random_state=42,      # Reproducibilidad
+            max_depth=10,         # Evitar overfitting
+            min_samples_split=5   # Mínimo para dividir nodos
+        )
+        self.model.fit(X_train, y_train)
+        
+        # ENTRENAMIENTO MODELO 2: Isolation Forest (No supervisado)
+        # Detecta patrones anómalos sin usar etiquetas
+        print("🔍 Entrenando Isolation Forest (detección de anomalías)...")
+        self.anomaly_detector = IsolationForest(
+            contamination=0.1,    # Esperamos ~10% de anomalías
+            random_state=42,      # Reproducibilidad
+            n_estimators=100      # 100 árboles de aislamiento
+        )
+        self.anomaly_detector.fit(X_train)
+        
+        # Evaluación en datos de prueba
+        accuracy_rf = self.model.score(X_test, y_test)
+        print(f"\n📊 Evaluación en datos de prueba:")
+        print(f"   🎯 Random Forest Accuracy: {accuracy_rf:.4f}")
+        
+        # Evaluar detector de anomalías
+        anomaly_predictions = self.anomaly_detector.predict(X_test)
+        anomaly_predictions = np.where(anomaly_predictions == -1, 1, 0)
+        anomaly_accuracy = np.mean(anomaly_predictions == y_test)
+        print(f"   🔍 Isolation Forest Accuracy: {anomaly_accuracy:.4f}")
+        
+        # Marcar como entrenado y guardar
+        self.is_trained = True
+        self.save_models()
+        
+        print("✅ Entrenamiento completado exitosamente")
+        print("💾 Modelos guardados para uso futuro")
         
         # Dividir datos
         X_train, X_test, y_train, y_test = train_test_split(
@@ -102,43 +240,95 @@ class SmartDryWallDetector:
             
     def predict_anomaly(self, raw_value, humidity_pct, hour=None, minute=None):
         """
-        Predice si hay una anomalía usando ML
-        """
-        if not self.is_trained:
-            if not self.load_models():
-                print("❌ Modelos no disponibles, usando umbral básico")
-                return humidity_pct > self.threshold_basic, "Umbral básico"
+        Predice si una lectura del sensor indica anomalía usando ML inteligente.
         
-        # Preparar datos
-        if hour is None:
-            now = datetime.now()
-            hour = now.hour
-            minute = now.minute
+        Este es el corazón del sistema de detección en tiempo real. Combina
+        múltiples enfoques de ML para una detección más robusta y confiable.
+        
+        Proceso de predicción:
+        1. Verificar disponibilidad de modelos entrenados
+        2. Preparar características de entrada
+        3. Ejecutar predicción con Random Forest (supervisado)
+        4. Ejecutar detección con Isolation Forest (no supervisado)
+        5. Combinar resultados con lógica de consenso
+        6. Calcular nivel de confianza de la predicción
+        
+        Args:
+            raw_value (int): Valor crudo del sensor de humedad
+            humidity_pct (float): Porcentaje de humedad calculado
+            hour (int, optional): Hora actual (0-23)
+            minute (int, optional): Minuto actual (0-59)
             
+        Returns:
+            tuple: (is_anomaly, method, confidence, anomaly_score)
+            - is_anomaly (bool): ¿Se detectó anomalía?
+            - method (str): Método de detección utilizado
+            - confidence (float): Nivel de confianza (0.0-1.0)
+            - anomaly_score (float): Score numérico de anomalía
+        
+        Lógica de consenso:
+        - Ambos modelos detectan → ALTA CONFIANZA
+        - Solo supervisado detecta → MEDIA CONFIANZA  
+        - Solo no supervisado detecta → BAJA CONFIANZA
+        - Ninguno detecta → NORMAL
+        """
+        # Verificar si los modelos están disponibles
+        if not self.is_trained:
+            print("⚠️ Modelos no entrenados, intentando cargar...")
+            if not self.load_models():
+                print("❌ Modelos no disponibles, usando detección básica")
+                is_basic_anomaly = humidity_pct > self.threshold_basic
+                return is_basic_anomaly, "Umbral básico (50%)", 0.6, 0.0
+        
+        # Preparar características para predicción
+        # Usar tiempo actual si no se proporciona
+        if hour is None or minute is None:
+            now = datetime.now()
+            hour = now.hour if hour is None else hour
+            minute = now.minute if minute is None else minute
+            
+        # Crear vector de características idéntico al entrenamiento
         features = np.array([[raw_value, humidity_pct, hour, minute]])
-        features_scaled = self.scaler.transform(features)
+        features_scaled = self.scaler.transform(features)  # Aplicar misma normalización
         
-        # Predicción con clasificador
-        prob_anomaly = self.model.predict_proba(features_scaled)[0][1]
-        is_anomaly_classifier = self.model.predict(features_scaled)[0]
+        # ============= PREDICCIÓN CON MODELO SUPERVISADO =============
+        # Random Forest da probabilidades de clase
+        prob_anomaly = self.model.predict_proba(features_scaled)[0][1]  # Probabilidad de anomalía
+        is_anomaly_classifier = self.model.predict(features_scaled)[0]   # Predicción binaria
         
-        # Predicción con detector de anomalías
+        # ============= DETECCIÓN CON MODELO NO SUPERVISADO =============
+        # Isolation Forest da score de anomalía y predicción binaria
         anomaly_score = self.anomaly_detector.decision_function(features_scaled)[0]
         is_anomaly_detector = self.anomaly_detector.predict(features_scaled)[0] == -1
         
-        # Decisión final combinada
-        confidence = prob_anomaly
-        is_anomaly = is_anomaly_classifier or is_anomaly_detector
+        # ============= LÓGICA DE CONSENSO INTELIGENTE =============
+        confidence = prob_anomaly  # Confianza base del clasificador
+        is_anomaly = False
+        method = "ML Consenso"
         
-        method = "ML Combinado"
         if is_anomaly_classifier and is_anomaly_detector:
-            method = "ML Alto Riesgo"
-            confidence = min(prob_anomaly + 0.2, 1.0)
+            # Ambos detectan anomalía → MÁXIMA CONFIANZA
+            is_anomaly = True
+            method = "ML Alto Riesgo (Consenso)"
+            confidence = min(prob_anomaly + 0.2, 1.0)  # Boost de confianza
+            
         elif is_anomaly_classifier:
+            # Solo supervisado detecta → CONFIANZA MEDIA
+            is_anomaly = True
             method = "ML Clasificador"
+            confidence = prob_anomaly
+            
         elif is_anomaly_detector:
+            # Solo no supervisado detecta → CONFIANZA BAJA/MEDIA
+            is_anomaly = True
             method = "ML Detector Anomalías"
-            confidence = 0.7
+            confidence = 0.7  # Confianza moderada
+            
+        else:
+            # Ninguno detecta → NORMAL
+            is_anomaly = False
+            method = "ML Normal"
+            confidence = 1.0 - prob_anomaly  # Confianza en normalidad
             
         return is_anomaly, method, confidence, anomaly_score
     
@@ -157,27 +347,84 @@ class SmartDryWallDetector:
     
     def generate_alert_message(self, raw_value, humidity_pct):
         """
-        Genera mensaje de alerta inteligente
+        Genera mensaje de alerta inteligente con análisis ML contextualizado.
+        
+        Esta función crea mensajes personalizados basados en:
+        - Predicción ML (anomalía detectada o no)
+        - Nivel de confianza del algoritmo
+        - Contexto de riesgo según humedad
+        - Recomendaciones específicas para la situación
+        
+        Los mensajes incluyen:
+        - Emoji descriptivo según severidad
+        - Datos técnicos del sensor
+        - Análisis ML detallado (método y confianza)
+        - Recomendaciones contextualizadas
+        - Nivel de urgencia de la respuesta
+        
+        Args:
+            raw_value (int): Valor crudo del sensor
+            humidity_pct (float): Porcentaje de humedad
+            
+        Returns:
+            tuple: (message, is_anomaly)
+            - message (str): Mensaje formateado para WhatsApp
+            - is_anomaly (bool): Indica si hay anomalía detectada
         """
+        # Ejecutar análisis ML completo
         is_anomaly, method, confidence, anomaly_score = self.predict_anomaly(raw_value, humidity_pct)
         risk_level, risk_description = self.get_risk_level(humidity_pct, confidence)
         
         if is_anomaly:
-            message = f"⚠️ ALERTA DE FILTRACIÓN DETECTADA\n\n"
-            message += f"📊 Datos del sensor:\n"
-            message += f"   • Humedad: {humidity_pct}%\n"
+            # ============= MENSAJE DE ALERTA =============
+            message = f"🚨 ALERTA DE FILTRACIÓN DETECTADA\n"
+            message += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Datos técnicos del sensor
+            message += f"📊 DATOS DEL SENSOR:\n"
+            message += f"   • Humedad: {humidity_pct:.1f}%\n"
             message += f"   • Valor raw: {raw_value}\n"
+            message += f"   • Timestamp: {datetime.now().strftime('%H:%M:%S')}\n"
             message += f"   • Nivel de riesgo: {risk_level}\n\n"
-            message += f"🧠 Análisis ML:\n"
-            message += f"   • Método: {method}\n"
-            message += f"   • Confianza: {confidence:.2%}\n"
-            message += f"   • Score anomalía: {anomaly_score:.3f}\n\n"
-            message += f"💡 Recomendación: {risk_description}\n"
-            message += f"🔧 Revisar zona afectada inmediatamente"
+            
+            # Análisis de Machine Learning
+            message += f"🧠 ANÁLISIS INTELIGENTE:\n"
+            message += f"   • Método detección: {method}\n"
+            message += f"   • Confianza ML: {confidence:.1%}\n"
+            message += f"   • Score anomalía: {anomaly_score:.3f}\n"
+            
+            # Interpretación del score
+            if anomaly_score < -0.3:
+                score_interpretation = "Muy anómalo"
+            elif anomaly_score < -0.1:
+                score_interpretation = "Moderadamente anómalo"
+            else:
+                score_interpretation = "Ligeramente anómalo"
+            message += f"   • Interpretación: {score_interpretation}\n\n"
+            
+            # Recomendaciones contextualizadas
+            message += f"💡 RECOMENDACIÓN:\n"
+            message += f"   {risk_description}\n\n"
+            
+            # Nivel de urgencia
+            if confidence > 0.8:
+                urgency = "🔴 URGENTE - Revisar inmediatamente"
+            elif confidence > 0.6:
+                urgency = "� MODERADO - Revisar en las próximas horas"
+            else:
+                urgency = "🟡 PRECAUCIÓN - Monitorear de cerca"
+                
+            message += f"⚡ URGENCIA: {urgency}\n"
+            message += f"🔧 Inspeccionar zona del sensor ahora"
+            
         else:
-            message = f"✅ Sistema normal\n"
-            message += f"📊 Humedad: {humidity_pct}% | Raw: {raw_value}\n"
-            message += f"🧠 ML: {method} (Confianza: {confidence:.2%})"
+            # ============= MENSAJE DE ESTADO NORMAL =============
+            message = f"✅ SISTEMA DRYWALL NORMAL\n"
+            message += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"📊 Humedad: {humidity_pct:.1f}% | Raw: {raw_value}\n"
+            message += f"🧠 Análisis ML: {method}\n"
+            message += f"🎯 Confianza: {confidence:.1%}\n"
+            message += f"⏰ {datetime.now().strftime('%H:%M:%S')}"
             
         return message, is_anomaly
     
