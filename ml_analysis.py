@@ -69,16 +69,6 @@ from sklearn.metrics import silhouette_score, adjusted_rand_score
 
 # Importación opcional de TensorFlow para redes neuronales avanzadas
 # TensorFlow se usa para crear un Autoencoder (red neuronal para detección de anomalías)
-try:
-    import tensorflow as tf  # Framework de deep learning de Google
-    from tensorflow.keras.models import Model  # Para definir arquitecturas de red
-    from tensorflow.keras.layers import Dense, Input  # Capas densas y de entrada
-    TENSORFLOW_AVAILABLE = True
-    print("✅ TensorFlow disponible - Se usarán 10 modelos incluyendo Autoencoder")
-except ImportError:
-    TENSORFLOW_AVAILABLE = False
-    print("⚠️ TensorFlow no disponible. Se usarán 9 modelos (suficiente para el análisis)")
-    print("💡 Para instalar TensorFlow: pip install tensorflow")
 
 class DryWallAnalyzer:
     """
@@ -95,12 +85,13 @@ class DryWallAnalyzer:
     para el sistema de alertas de WhatsApp.
     """
     
-    def __init__(self, data_file='humedad_datos.csv'):
+    def __init__(self, data_file='synthetic_drywall_data_7days.csv'):
         """
         Inicializa el analizador con los datos del sensor de humedad
         
         Args:
             data_file (str): Ruta al archivo CSV con datos del sensor
+                           Por defecto usa el nuevo dataset sintético de 7 días
             
         Atributos:
             data_file: Archivo de datos
@@ -113,8 +104,8 @@ class DryWallAnalyzer:
         """
         self.data_file = data_file
         self.df = None  # DataFrame principal con todos los datos
-        self.X = None   # Características (raw, humidity_pct, hour, minute)
-        self.y = None   # Variable objetivo (is_anomaly: 0=normal, 1=anomalía)
+        self.X = None   # Características expandidas con nuevas variables
+        self.y = None   # Variable objetivo (is_anomaly: ya incluida en el dataset)
         
         # Datos divididos para entrenamiento y evaluación
         self.X_train = None
@@ -130,63 +121,127 @@ class DryWallAnalyzer:
         """
         Carga y prepara los datos para el análisis de Machine Learning.
         
-        Este método:
-        1. Lee el archivo CSV con datos del sensor
-        2. Extrae características temporales (hora, minuto)
-        3. Crea variables objetivo para clasificación
-        4. Normaliza los datos para los algoritmos ML
-        5. Muestra estadísticas descriptivas
+        NUEVO: Adaptado para el dataset sintético de 7 días con 15 características.
+        Este dataset ya incluye muchas variables calculadas que mejoran el análisis ML.
         
-        Variables creadas:
-        - is_anomaly: 1 si humedad > 50% (indica filtración), 0 si normal
-        - risk_level: Categorías de riesgo (Bajo/Normal/Alto/Crítico)
-        - hour/minute: Características temporales extraídas del timestamp
+        Este método:
+        1. Lee el archivo CSV con datos del sensor (10,080 registros)
+        2. Analiza las características ya incluidas en el dataset
+        3. Selecciona las mejores características para ML
+        4. Normaliza los datos para los algoritmos ML
+        5. Muestra estadísticas descriptivas del dataset enriquecido
+        
+        Nuevas características disponibles:
+        - timestamp: Timestamp completo con fecha y hora
+        - humidity_pct: Porcentaje de humedad (característica principal)
+        - raw_value: Valor crudo del sensor (renombrado de 'raw')
+        - device_id: Identificador del dispositivo sensor
+        - hour: Hora del día (0-23)
+        - day_of_week: Día de la semana (0-6)
+        - is_weekend: Indicador de fin de semana (0/1)
+        - is_night: Indicador de horario nocturno (0/1)
+        - humidity_category: Categoría de humedad (0=baja, 1=media, 2=alta)
+        - raw_normalized: Valor raw normalizado (0-1)
+        - humidity_risk_level: Nivel de riesgo de humedad (0.1-0.8)
+        - sensor_stability: Estabilidad del sensor (0-1)
+        - is_anomaly: Variable objetivo (0=normal, 1=anomalía) ¡YA CALCULADA!
+        - humidity_change: Cambio en humedad respecto a lectura anterior
+        - raw_change: Cambio en valor raw respecto a lectura anterior
         """
-        print("📊 Cargando datos del sensor de humedad...")
+        print("📊 Cargando datos del sensor de humedad (Dataset 7 días)...")
         self.df = pd.read_csv(self.data_file)
         
-        # Información básica del dataset para entender los datos
-        print(f"✅ Datos cargados: {len(self.df)} registros")
-        print(f"📋 Columnas disponibles: {list(self.df.columns)}")
-        print(f"📊 Estadísticas básicas de los datos:")
-        print(self.df.describe())
+        # Información básica del dataset enriquecido
+        print(f"✅ Datos cargados: {len(self.df)} registros (7 días de datos)")
+        print(f"📋 Columnas disponibles: {len(self.df.columns)} características")
+        print(f"� Periodo: {self.df.shape[0]} registros con timestamp completo")
         
-        # Feature Engineering: Crear características adicionales desde timestamp
-        # Convertir timestamp a hora y minuto para capturar patrones temporales
-        # Ejemplo: "14:30:25" -> hour=14, minute=30
-        self.df['hour'] = pd.to_datetime(self.df['timestamp'], format='%H:%M:%S').dt.hour
-        self.df['minute'] = pd.to_datetime(self.df['timestamp'], format='%H:%M:%S').dt.minute
+        # Mostrar las nuevas columnas disponibles
+        print(f"\n🆕 CARACTERÍSTICAS DEL NUEVO DATASET:")
+        for i, col in enumerate(self.df.columns, 1):
+            print(f"   {i:2d}. {col}")
         
-        # Crear variable objetivo para clasificación binaria
-        # CRITERIO CLAVE: Humedad > 50% indica posible filtración
-        # Esto se basa en estándares de construcción donde >50% es problemático
-        self.df['is_anomaly'] = (self.df['humidity_pct'] > 50).astype(int)
+        # Análisis de la variable objetivo (ya incluida en el dataset)
+        print(f"\n🎯 ANÁLISIS DE LA VARIABLE OBJETIVO (is_anomaly):")
+        anomaly_counts = self.df['is_anomaly'].value_counts().sort_index()
+        total = len(self.df)
+        print(f"   Normal (0): {anomaly_counts[0]:,} casos ({anomaly_counts[0]/total:.1%})")
+        print(f"   Anomalía (1): {anomaly_counts[1]:,} casos ({anomaly_counts[1]/total:.1%})")
         
-        # Crear clasificación por niveles de riesgo para análisis adicional
-        self.df['risk_level'] = pd.cut(
-            self.df['humidity_pct'], 
-            bins=[0, 20, 40, 60, 100],  # Rangos de humedad
-            labels=['Bajo', 'Normal', 'Alto', 'Crítico']  # Etiquetas descriptivas
-        )
+        # Análisis de distribución por categorías
+        print(f"\n📊 DISTRIBUCIÓN POR CATEGORÍAS:")
+        print(f"   Categorías humedad: {self.df['humidity_category'].value_counts().sort_index().to_dict()}")
+        print(f"   Niveles de riesgo únicos: {self.df['humidity_risk_level'].nunique()}")
+        print(f"   Dispositivos: {self.df['device_id'].unique()}")
         
-        # Seleccionar características (features) para el modelo
-        # Incluimos valor raw del sensor, porcentaje de humedad y tiempo
-        feature_columns = ['raw', 'humidity_pct', 'hour', 'minute']
-        self.X = self.df[feature_columns]  # Matriz de características
-        self.y = self.df['is_anomaly']     # Vector de etiquetas objetivo
+        # Convertir timestamp a datetime para análisis temporal
+        self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
+        self.df['minute'] = self.df['timestamp'].dt.minute  # Extraer minutos para compatibilidad
         
-        # Normalización de características para algoritmos sensibles a escala
-        # StandardScaler convierte datos a media=0, desviación=1
+        # Análisis temporal
+        date_range = self.df['timestamp'].dt.date
+        print(f"   Rango temporal: {date_range.min()} a {date_range.max()}")
+        print(f"   Días únicos: {date_range.nunique()} días")
+        
+        # SELECCIÓN INTELIGENTE DE CARACTERÍSTICAS PARA ML
+        # Incluimos tanto características originales como las nuevas calculadas
+        feature_columns = [
+            # Características principales del sensor
+            'humidity_pct',           # Humedad principal
+            'raw_value',             # Valor crudo del sensor
+            'raw_normalized',        # Valor raw normalizado (ya calculado)
+            
+            # Características temporales
+            'hour',                  # Hora del día
+            'minute',               # Minuto de la hora
+            'day_of_week',          # Día de semana
+            'is_weekend',           # ¿Es fin de semana?
+            'is_night',             # ¿Es horario nocturno?
+            
+            # Características de contexto y riesgo
+            'humidity_category',     # Categoría de humedad
+            'humidity_risk_level',   # Nivel de riesgo calculado
+            'sensor_stability',      # Estabilidad del sensor
+            
+            # Características de cambio temporal
+            'humidity_change',       # Cambio en humedad
+            'raw_change'            # Cambio en valor raw
+        ]
+        
+        print(f"\n⚙️ CARACTERÍSTICAS SELECCIONADAS PARA ML ({len(feature_columns)}):")
+        for i, feature in enumerate(feature_columns, 1):
+            print(f"   {i:2d}. {feature}")
+        
+        # Crear matrices para ML
+        self.X = self.df[feature_columns]  # Matriz de características expandida
+        self.y = self.df['is_anomaly']     # Variable objetivo (ya incluida)
+        
+        # Verificar y manejar valores faltantes
+        missing_values = self.X.isnull().sum()
+        if missing_values.any():
+            print(f"\n⚠️ VALORES FALTANTES DETECTADOS:")
+            for col, missing in missing_values[missing_values > 0].items():
+                print(f"   {col}: {missing} valores faltantes")
+            
+            # Rellenar valores faltantes con la media para características numéricas
+            self.X = self.X.fillna(self.X.mean())
+            print("✅ Valores faltantes rellenados con la media")
+        
+        # Normalización de características
         self.X_scaled = self.scaler.fit_transform(self.X)
+        print(f"\n📏 Datos normalizados: {self.X_scaled.shape} (media=0, desviación=1)")
         
-        # Mostrar distribución de clases para verificar balance
-        print(f"\n🎯 Distribución de casos:")
-        print(f"   Normal (0): {(self.y == 0).sum()} casos")
-        print(f"   Anomalía (1): {(self.y == 1).sum()} casos")
-        print(f"   Porcentaje anomalías: {(self.y == 1).mean():.2%}")
+        # Estadísticas finales
+        print(f"\n📈 ESTADÍSTICAS FINALES:")
+        print(f"   Total registros: {len(self.df):,}")
+        print(f"   Características ML: {len(feature_columns)}")
+        print(f"   Tasa de anomalías: {self.y.mean():.2%}")
+        print(f"   Rango temporal: {(self.df['timestamp'].max() - self.df['timestamp'].min()).days} días")
         
-        print(f"\n🎯 Distribución por nivel de riesgo:")
-        print(self.df['risk_level'].value_counts())
+        # Mostrar estadísticas descriptivas de características clave
+        print(f"\n📊 ESTADÍSTICAS DE CARACTERÍSTICAS CLAVE:")
+        key_stats = self.df[['humidity_pct', 'raw_value', 'humidity_risk_level', 'sensor_stability']].describe()
+        print(key_stats.round(2))
         
     def split_data(self):
         """
@@ -215,78 +270,233 @@ class DryWallAnalyzer:
         
     def visualize_data(self):
         """
-        Crea visualizaciones exploratorias para entender los datos.
+        Crea visualizaciones exploratorias para entender los datos del nuevo dataset.
         
-        Genera 6 gráficos diferentes:
-        1. Histograma de distribución de humedad
-        2. Scatter plot raw vs humedad coloreado por anomalías
-        3. Serie temporal de humedad
-        4. Promedio de humedad por hora del día
-        5. Boxplot de valores raw por nivel de riesgo
-        6. Matriz de correlación entre variables
+        ACTUALIZADO: Genera visualizaciones aprovechando las nuevas características
+        del dataset sintético de 7 días. Incluye análisis temporal más profundo
+        y nuevas variables calculadas.
+        
+        Genera 8 gráficos diferentes:
+        1. Distribución de humedad con categorías
+        2. Serie temporal de 7 días con anomalías
+        3. Patrones por día de la semana
+        4. Distribución de anomalías por hora del día
+        5. Niveles de riesgo vs estabilidad del sensor
+        6. Matriz de correlación expandida
+        7. Análisis fin de semana vs días laborales
+        8. Distribución de cambios en humedad
         
         Estas visualizaciones ayudan a:
-        - Identificar patrones temporales
-        - Detectar correlaciones entre variables
-        - Entender la distribución de anomalías
-        - Validar la calidad de los datos
+        - Identificar patrones temporales de 7 días
+        - Analizar comportamiento por día de semana
+        - Entender relación entre nuevas variables
+        - Validar calidad del dataset sintético
         """
-        plt.figure(figsize=(15, 10))
+        plt.figure(figsize=(20, 15))  # Más espacio para más gráficos
         
-        # Gráfico 1: Distribución de humedad - ¿Los datos están balanceados?
-        plt.subplot(2, 3, 1)
-        plt.hist(self.df['humidity_pct'], bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-        plt.title('Distribución de Humedad %\n(¿Hay sesgo hacia ciertos valores?)')
+        # Gráfico 1: Distribución de humedad con categorías mejorada
+        plt.subplot(3, 3, 1)
+        
+        # Histograma con categorías de color
+        for category in sorted(self.df['humidity_category'].unique()):
+            mask = self.df['humidity_category'] == category
+            plt.hist(self.df[mask]['humidity_pct'], bins=30, alpha=0.6, 
+                    label=f'Categoría {category}', density=True)
+        
+        plt.title('Distribución de Humedad por Categoría\n(Dataset 7 días)')
         plt.xlabel('Humedad %')
-        plt.ylabel('Frecuencia')
-        plt.axvline(x=50, color='red', linestyle='--', label='Umbral anomalía (50%)')
+        plt.ylabel('Densidad')
         plt.legend()
+        plt.grid(True, alpha=0.3)
         
-        # Gráfico 2: Relación raw vs humedad con anomalías
-        plt.subplot(2, 3, 2)
-        scatter = plt.scatter(self.df['raw'], self.df['humidity_pct'], 
-                            c=self.df['is_anomaly'], cmap='viridis', alpha=0.6)
-        plt.colorbar(scatter, label='Anomalía (0=Normal, 1=Anomalía)')
-        plt.title('Sensor Raw vs Humedad %\n(Coloreado por anomalías)')
-        plt.xlabel('Valor Raw del Sensor')
-        plt.ylabel('Humedad %')
+        # Gráfico 2: Serie temporal de 7 días completa
+        plt.subplot(3, 3, 2)
         
-        # Gráfico 3: Serie temporal - ¿Hay tendencias o estacionalidad?
-        plt.subplot(2, 3, 3)
-        plt.plot(self.df.index, self.df['humidity_pct'], alpha=0.7, linewidth=1)
-        plt.title('Serie Temporal de Humedad\n(¿Hay patrones temporales?)')
-        plt.xlabel('Tiempo (índice de muestra)')
+        # Muestrear datos para visualización (cada 10 puntos para claridad)
+        sample_df = self.df.iloc[::10].copy()
+        
+        plt.plot(sample_df['timestamp'], sample_df['humidity_pct'], 
+                alpha=0.7, linewidth=0.8, color='blue', label='Humedad')
+        
+        # Resaltar anomalías
+        anomalies = sample_df[sample_df['is_anomaly'] == 1]
+        plt.scatter(anomalies['timestamp'], anomalies['humidity_pct'], 
+                   color='red', s=20, alpha=0.8, label='Anomalías', zorder=5)
+        
+        plt.title('Serie Temporal 7 Días\n(Cada 10mo punto, anomalías resaltadas)')
+        plt.xlabel('Fecha y Hora')
         plt.ylabel('Humedad %')
-        plt.axhline(y=50, color='red', linestyle='--', alpha=0.7, label='Umbral crítico')
         plt.legend()
-        
-        # Gráfico 4: Patrones por hora del día
-        plt.subplot(2, 3, 4)
-        hourly_avg = self.df.groupby('hour')['humidity_pct'].mean()
-        plt.bar(hourly_avg.index, hourly_avg.values, alpha=0.7, color='orange')
-        plt.title('Humedad Promedio por Hora\n(¿Hay horas más problemáticas?)')
-        plt.xlabel('Hora del día')
-        plt.ylabel('Humedad promedio %')
-        plt.xticks(range(0, 24, 2))  # Mostrar cada 2 horas
-        
-        # Gráfico 5: Distribución de valores raw por nivel de riesgo
-        plt.subplot(2, 3, 5)
-        sns.boxplot(data=self.df, x='risk_level', y='raw')
-        plt.title('Distribución de Valores Raw\npor Nivel de Riesgo')
-        plt.xlabel('Nivel de Riesgo')
-        plt.ylabel('Valor Raw del Sensor')
         plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
         
-        # Gráfico 6: Matriz de correlación - ¿Qué variables están relacionadas?
-        plt.subplot(2, 3, 6)
-        correlation_matrix = self.df[['raw', 'humidity_pct', 'hour', 'minute', 'is_anomaly']].corr()
-        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', center=0, 
-                   fmt='.2f', square=True)
-        plt.title('Matriz de Correlación\n(Relaciones entre variables)')
+        # Gráfico 3: Patrones por día de la semana
+        plt.subplot(3, 3, 3)
+        
+        # Promedio de humedad por día de semana
+        days = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+        daily_stats = self.df.groupby('day_of_week').agg({
+            'humidity_pct': ['mean', 'std'],
+            'is_anomaly': 'mean'
+        }).round(2)
+        
+        x_pos = range(7)
+        means = daily_stats['humidity_pct']['mean']
+        stds = daily_stats['humidity_pct']['std']
+        
+        plt.bar(x_pos, means, yerr=stds, alpha=0.7, capsize=5, 
+               color=['red' if self.df[self.df['day_of_week']==i]['is_weekend'].iloc[0] 
+                     else 'blue' for i in range(7)])
+        
+        plt.title('Humedad Promedio por Día\n(Rojo=Fin de semana)')
+        plt.xlabel('Día de la Semana')
+        plt.ylabel('Humedad Promedio %')
+        plt.xticks(x_pos, days)
+        plt.grid(True, alpha=0.3)
+        
+        # Gráfico 4: Distribución de anomalías por hora
+        plt.subplot(3, 3, 4)
+        
+        hourly_anomalies = self.df.groupby('hour')['is_anomaly'].agg(['count', 'sum', 'mean'])
+        anomaly_rate = hourly_anomalies['mean'] * 100
+        
+        bars = plt.bar(hourly_anomalies.index, anomaly_rate, alpha=0.7, 
+                      color=['darkred' if rate > anomaly_rate.mean() else 'orange' 
+                             for rate in anomaly_rate])
+        
+        plt.title('Tasa de Anomalías por Hora del Día\n(% de lecturas anómalas)')
+        plt.xlabel('Hora del Día')
+        plt.ylabel('Tasa de Anomalías (%)')
+        plt.axhline(y=anomaly_rate.mean(), color='red', linestyle='--', 
+                   label=f'Promedio: {anomaly_rate.mean():.1f}%')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Gráfico 5: Nivel de riesgo vs estabilidad del sensor
+        plt.subplot(3, 3, 5)
+        
+        scatter = plt.scatter(self.df['humidity_risk_level'], self.df['sensor_stability'], 
+                            c=self.df['humidity_pct'], cmap='viridis', alpha=0.6, s=20)
+        plt.colorbar(scatter, label='Humedad %')
+        plt.title('Riesgo vs Estabilidad del Sensor\n(Coloreado por humedad)')
+        plt.xlabel('Nivel de Riesgo de Humedad')
+        plt.ylabel('Estabilidad del Sensor')
+        plt.grid(True, alpha=0.3)
+        
+        # Gráfico 6: Matriz de correlación expandida (variables clave)
+        plt.subplot(3, 3, 6)
+        
+        # Seleccionar variables más importantes para correlación
+        corr_vars = ['humidity_pct', 'raw_value', 'humidity_risk_level', 
+                    'sensor_stability', 'humidity_change', 'raw_change', 
+                    'hour', 'is_weekend', 'is_anomaly']
+        
+        correlation_matrix = self.df[corr_vars].corr()
+        
+        mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))  # Mostrar solo triángulo inferior
+        sns.heatmap(correlation_matrix, mask=mask, annot=True, cmap='coolwarm', 
+                   center=0, fmt='.2f', square=True, cbar_kws={'shrink': 0.8})
+        plt.title('Correlaciones Entre Variables Clave')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        
+        # Gráfico 7: Análisis fin de semana vs días laborales
+        plt.subplot(3, 3, 7)
+        
+        weekend_stats = self.df.groupby('is_weekend').agg({
+            'humidity_pct': ['mean', 'std'],
+            'is_anomaly': ['mean', 'count']
+        })
+        
+        categories = ['Días Laborales', 'Fin de Semana']
+        humidity_means = [weekend_stats.loc[0, ('humidity_pct', 'mean')], 
+                         weekend_stats.loc[1, ('humidity_pct', 'mean')]]
+        anomaly_rates = [weekend_stats.loc[0, ('is_anomaly', 'mean')] * 100,
+                        weekend_stats.loc[1, ('is_anomaly', 'mean')] * 100]
+        
+        x_pos = np.arange(len(categories))
+        width = 0.35
+        
+        fig_ax = plt.gca()
+        bars1 = plt.bar(x_pos - width/2, humidity_means, width, label='Humedad Promedio %', alpha=0.7)
+        
+        # Crear segundo eje Y para tasa de anomalías
+        ax2 = fig_ax.twinx()
+        bars2 = ax2.bar(x_pos + width/2, anomaly_rates, width, label='Tasa Anomalías %', 
+                       alpha=0.7, color='red')
+        
+        fig_ax.set_xlabel('Tipo de Día')
+        fig_ax.set_ylabel('Humedad Promedio %', color='blue')
+        ax2.set_ylabel('Tasa de Anomalías %', color='red')
+        fig_ax.set_title('Comparación: Días Laborales vs Fin de Semana')
+        fig_ax.set_xticks(x_pos)
+        fig_ax.set_xticklabels(categories)
+        
+        # Leyenda combinada
+        lines1, labels1 = fig_ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        fig_ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        
+        # Gráfico 8: Distribución de cambios en humedad
+        plt.subplot(3, 3, 8)
+        
+        # Histograma de cambios en humedad
+        plt.hist(self.df['humidity_change'], bins=50, alpha=0.7, density=True, 
+                color='skyblue', edgecolor='black')
+        
+        # Estadísticas de cambios
+        mean_change = self.df['humidity_change'].mean()
+        std_change = self.df['humidity_change'].std()
+        
+        plt.axvline(mean_change, color='red', linestyle='--', 
+                   label=f'Media: {mean_change:.2f}')
+        plt.axvline(mean_change + 2*std_change, color='orange', linestyle='--', 
+                   label=f'+2σ: {mean_change + 2*std_change:.2f}')
+        plt.axvline(mean_change - 2*std_change, color='orange', linestyle='--', 
+                   label=f'-2σ: {mean_change - 2*std_change:.2f}')
+        
+        plt.title('Distribución de Cambios en Humedad\n(Entre lecturas consecutivas)')
+        plt.xlabel('Cambio en Humedad')
+        plt.ylabel('Densidad')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Gráfico 9: Resumen de dispositivos y estabilidad
+        plt.subplot(3, 3, 9)
+        
+        # Análisis por dispositivo (si hay múltiples)
+        device_stats = self.df.groupby('device_id').agg({
+            'sensor_stability': 'mean',
+            'is_anomaly': 'mean',
+            'humidity_pct': 'mean'
+        }).round(3)
+        
+        if len(device_stats) > 1:
+            # Si hay múltiples dispositivos
+            plt.bar(range(len(device_stats)), device_stats['sensor_stability'], 
+                   alpha=0.7, label='Estabilidad Promedio')
+            plt.title('Estabilidad por Dispositivo')
+            plt.xlabel('Dispositivo')
+            plt.ylabel('Estabilidad Promedio')
+        else:
+            # Si hay un solo dispositivo, mostrar distribución de estabilidad
+            plt.hist(self.df['sensor_stability'], bins=30, alpha=0.7, 
+                    color='green', edgecolor='black')
+            plt.title('Distribución de Estabilidad del Sensor')
+            plt.xlabel('Estabilidad del Sensor')
+            plt.ylabel('Frecuencia')
+            
+            # Estadísticas
+            mean_stability = self.df['sensor_stability'].mean()
+            plt.axvline(mean_stability, color='red', linestyle='--', 
+                       label=f'Media: {mean_stability:.3f}')
+            plt.legend()
+        
+        plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig('data_analysis.png', dpi=300, bbox_inches='tight')
-        print("📊 Visualizaciones guardadas en 'data_analysis.png'")
+        plt.savefig('data_analysis_7days.png', dpi=300, bbox_inches='tight')
+        print("📊 Visualizaciones del dataset 7 días guardadas en 'data_analysis_7days.png'")
         plt.show()
         
     def evaluate_model(self, model, X_test, y_test, model_name, is_supervised=True):

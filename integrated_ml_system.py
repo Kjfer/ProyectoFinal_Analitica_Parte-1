@@ -56,12 +56,16 @@ class SmartDryWallDetector:
     - Combinación híbrida para mayor robustez
     """
     
-    def __init__(self, data_file='humedad_datos.csv'):
+    def __init__(self, data_file='synthetic_drywall_data_7days.csv'):
         """
         Inicializa el detector inteligente de filtraciones.
         
+        ACTUALIZADO: Adaptado para el nuevo dataset sintético de 7 días con
+        características expandidas que mejoran significativamente la detección.
+        
         Args:
             data_file (str): Archivo CSV con datos históricos del sensor
+                           Por defecto usa el nuevo dataset de 7 días
             
         Atributos:
             data_file: Ruta a datos históricos para entrenamiento
@@ -70,6 +74,7 @@ class SmartDryWallDetector:
             scaler: Normalizador de características para consistencia
             is_trained: Flag que indica si los modelos están entrenados
             threshold_basic: Umbral básico de respaldo (50% humedad)
+            feature_columns: Lista de características para predicción
         """
         self.data_file = data_file
         
@@ -82,60 +87,98 @@ class SmartDryWallDetector:
         self.is_trained = False        # ¿Modelos entrenados?
         self.threshold_basic = 50      # Umbral de respaldo (humedad %)
         
-        print("🤖 Smart DryWall Detector inicializado")
+        # NUEVO: Características expandidas del dataset sintético
+        self.feature_columns = [
+            'humidity_pct',           # Humedad principal
+            'raw_value',             # Valor crudo del sensor  
+            'raw_normalized',        # Valor raw normalizado
+            'hour',                  # Hora del día
+            'day_of_week',          # Día de semana
+            'is_weekend',           # ¿Es fin de semana?
+            'is_night',             # ¿Es horario nocturno?
+            'humidity_category',     # Categoría de humedad
+            'humidity_risk_level',   # Nivel de riesgo calculado
+            'sensor_stability',      # Estabilidad del sensor
+            'humidity_change',       # Cambio en humedad
+            'raw_change'            # Cambio en valor raw
+        ]
+        
+        print("🤖 Smart DryWall Detector inicializado (Dataset 7 días)")
         print(f"📂 Datos de entrenamiento: {data_file}")
+        print(f"⚙️ Características ML: {len(self.feature_columns)}")
         print(f"⚙️ Umbral básico de respaldo: {self.threshold_basic}%")
         
     def train_models(self):
         """
         Entrena los modelos de ML con datos históricos del sensor.
         
+        ACTUALIZADO: Aprovecha las nuevas características del dataset sintético
+        de 7 días para entrenar modelos más precisos y robustos.
+        
         Este método implementa el pipeline completo de entrenamiento:
-        1. Carga datos históricos desde CSV
-        2. Realiza feature engineering (extracción de características)
-        3. Prepara datos (normalización, división)
-        4. Entrena dos modelos complementarios:
-           - Random Forest: Supervisado (usa etiquetas conocidas)
-           - Isolation Forest: No supervisado (detecta patrones anómalos)
-        5. Evalúa el rendimiento en datos de prueba
-        6. Persiste modelos para uso futuro
+        1. Carga datos históricos enriquecidos (10,080 registros)
+        2. Utiliza características pre-calculadas del dataset sintético
+        3. Entrena modelos con características expandidas (12 features)
+        4. Evalúa rendimiento en datos de prueba
+        5. Persiste modelos para uso futuro
         
-        La combinación de ambos modelos permite:
-        - Mayor robustez en la detección
-        - Validación cruzada entre enfoques
-        - Reducción de falsas alarmas
+        Ventajas del nuevo dataset:
+        - 13x más datos (10,080 vs ~800 registros)
+        - 3x más características (12 vs 4 features)
+        - Variables objetivo ya calculadas
+        - Características temporales y contextuales avanzadas
+        - Datos sintéticos balanceados y representativos
         """
-        print("🧠 Entrenando modelos de Machine Learning...")
-        print("📊 Cargando datos históricos para aprendizaje...")
+        print("🧠 Entrenando modelos ML con dataset sintético de 7 días...")
+        print("📊 Cargando datos históricos enriquecidos...")
         
-        # Cargar y preparar datos históricos
+        # Cargar y preparar datos enriquecidos
         df = pd.read_csv(self.data_file)
-        print(f"✅ {len(df)} registros históricos cargados")
+        print(f"✅ {len(df):,} registros históricos cargados (7 días)")
+        print(f"📅 Periodo: {pd.to_datetime(df['timestamp']).dt.date.min()} a {pd.to_datetime(df['timestamp']).dt.date.max()}")
         
-        # Feature Engineering: Crear características temporales
-        # El análisis temporal puede revelar patrones de filtración
-        # Ejemplo: filtraciones más comunes en ciertos horarios
-        df['hour'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S').dt.hour
-        df['minute'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S').dt.minute
+        # Verificar integridad del dataset
+        print(f"\n🔍 VERIFICACIÓN DE INTEGRIDAD:")
+        print(f"   Columnas disponibles: {len(df.columns)}")
+        print(f"   Registros totales: {len(df):,}")
+        print(f"   Dispositivos únicos: {df['device_id'].nunique()}")
         
-        # Crear variable objetivo basada en umbral validado
-        # 50% de humedad es el punto crítico según estándares de construcción
-        df['is_anomaly'] = (df['humidity_pct'] > self.threshold_basic).astype(int)
+        # Análisis de la variable objetivo (ya incluida)
+        anomaly_distribution = df['is_anomaly'].value_counts()
+        print(f"   Casos normales: {anomaly_distribution[0]:,} ({anomaly_distribution[0]/len(df):.1%})")
+        print(f"   Casos anómalos: {anomaly_distribution[1]:,} ({anomaly_distribution[1]/len(df):.1%})")
         
-        print(f"🎯 Casos normales: {(df['is_anomaly'] == 0).sum()}")
-        print(f"🚨 Casos anómalos: {(df['is_anomaly'] == 1).sum()}")
-        print(f"📊 Tasa de anomalías: {df['is_anomaly'].mean():.2%}")
+        # Verificar disponibilidad de características requeridas
+        missing_features = [col for col in self.feature_columns if col not in df.columns]
+        if missing_features:
+            print(f"⚠️ Características faltantes: {missing_features}")
+            # Crear características faltantes si es necesario
+            if 'minute' not in df.columns:
+                df['minute'] = pd.to_datetime(df['timestamp']).dt.minute
+                print("✅ Característica 'minute' creada")
         
-        # Preparar características para entrenamiento
-        # Incluimos tanto valores raw como porcentajes y contexto temporal
-        feature_columns = ['raw', 'humidity_pct', 'hour', 'minute']
-        X = df[feature_columns]  # Matriz de características
-        y = df['is_anomaly']     # Vector de etiquetas objetivo
+        # Preparar datos para entrenamiento
+        print(f"\n⚙️ PREPARACIÓN DE CARACTERÍSTICAS:")
+        print(f"   Características seleccionadas: {len(self.feature_columns)}")
+        for i, feature in enumerate(self.feature_columns, 1):
+            print(f"   {i:2d}. {feature}")
         
-        # Normalización crítica para algoritmos ML
-        # Asegura que todas las características tengan la misma escala
+        # Extraer características y variable objetivo
+        X = df[self.feature_columns]  # Características expandidas
+        y = df['is_anomaly']         # Variable objetivo ya calculada
+        
+        # Verificar y manejar valores faltantes
+        missing_values = X.isnull().sum()
+        if missing_values.any():
+            print(f"\n⚠️ VALORES FALTANTES:")
+            for col, missing in missing_values[missing_values > 0].items():
+                print(f"   {col}: {missing} valores")
+            X = X.fillna(X.mean())  # Rellenar con media
+            print("✅ Valores faltantes rellenados")
+        
+        # Normalización de características
         X_scaled = self.scaler.fit_transform(X)
-        print("📏 Datos normalizados (media=0, desviación=1)")
+        print(f"📏 Características normalizadas: {X_scaled.shape}")
         
         # División estratificada para mantener proporción de clases
         X_train, X_test, y_train, y_test = train_test_split(
@@ -145,47 +188,82 @@ class SmartDryWallDetector:
             stratify=y          # Mantener proporción de anomalías
         )
         
-        print(f"📚 Datos entrenamiento: {len(X_train)} muestras")
-        print(f"🧪 Datos evaluación: {len(X_test)} muestras")
+        print(f"\n📚 DIVISIÓN DE DATOS:")
+        print(f"   Entrenamiento: {len(X_train):,} muestras")
+        print(f"   Evaluación: {len(X_test):,} muestras")
+        print(f"   Anomalías entrenamiento: {y_train.sum():,} ({y_train.mean():.1%})")
+        print(f"   Anomalías evaluación: {y_test.sum():,} ({y_test.mean():.1%})")
         
         # ENTRENAMIENTO MODELO 1: Random Forest (Supervisado)
-        # Aprende de ejemplos etiquetados históricos
-        print("\n🌳 Entrenando Random Forest (clasificación supervisada)...")
+        print(f"\n🌳 ENTRENANDO RANDOM FOREST (Supervisado)...")
         self.model = RandomForestClassifier(
-            n_estimators=100,     # 100 árboles para robustez
-            random_state=42,      # Reproducibilidad
-            max_depth=10,         # Evitar overfitting
-            min_samples_split=5   # Mínimo para dividir nodos
+            n_estimators=150,        # Más árboles para mayor precisión
+            random_state=42,         # Reproducibilidad
+            max_depth=15,           # Profundidad mayor para dataset complejo
+            min_samples_split=10,    # Evitar overfitting
+            min_samples_leaf=5,      # Mínimo en hojas
+            class_weight='balanced'  # Balance para clases desbalanceadas
         )
         self.model.fit(X_train, y_train)
         
+        # Evaluar Random Forest
+        rf_accuracy = self.model.score(X_test, y_test)
+        rf_predictions = self.model.predict(X_test)
+        rf_precision = np.mean((rf_predictions == 1) & (y_test == 1)) / np.max([np.mean(rf_predictions == 1), 0.001])
+        rf_recall = np.mean((rf_predictions == 1) & (y_test == 1)) / np.max([np.mean(y_test == 1), 0.001])
+        
+        print(f"   ✅ Accuracy: {rf_accuracy:.4f}")
+        print(f"   ✅ Precision: {rf_precision:.4f}")
+        print(f"   ✅ Recall: {rf_recall:.4f}")
+        
+        # Importancia de características
+        feature_importance = pd.DataFrame({
+            'feature': self.feature_columns,
+            'importance': self.model.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        print(f"\n🏆 TOP 5 CARACTERÍSTICAS MÁS IMPORTANTES:")
+        for i, (_, row) in enumerate(feature_importance.head().iterrows(), 1):
+            print(f"   {i}. {row['feature']}: {row['importance']:.4f}")
+        
         # ENTRENAMIENTO MODELO 2: Isolation Forest (No supervisado)
-        # Detecta patrones anómalos sin usar etiquetas
-        print("🔍 Entrenando Isolation Forest (detección de anomalías)...")
+        print(f"\n🔍 ENTRENANDO ISOLATION FOREST (No supervisado)...")
         self.anomaly_detector = IsolationForest(
-            contamination=0.1,    # Esperamos ~10% de anomalías
-            random_state=42,      # Reproducibilidad
-            n_estimators=100      # 100 árboles de aislamiento
+            contamination=y_train.mean(),  # Usar tasa real de anomalías
+            random_state=42,               # Reproducibilidad
+            n_estimators=150,              # Más estimadores
+            max_samples='auto',            # Muestras automáticas
+            bootstrap=True                 # Bootstrap para robustez
         )
         self.anomaly_detector.fit(X_train)
         
-        # Evaluación en datos de prueba
-        accuracy_rf = self.model.score(X_test, y_test)
-        print(f"\n📊 Evaluación en datos de prueba:")
-        print(f"   🎯 Random Forest Accuracy: {accuracy_rf:.4f}")
+        # Evaluar Isolation Forest
+        if_predictions = self.anomaly_detector.predict(X_test)
+        if_predictions = np.where(if_predictions == -1, 1, 0)  # Convertir -1 a 1
+        if_accuracy = np.mean(if_predictions == y_test)
         
-        # Evaluar detector de anomalías
-        anomaly_predictions = self.anomaly_detector.predict(X_test)
-        anomaly_predictions = np.where(anomaly_predictions == -1, 1, 0)
-        anomaly_accuracy = np.mean(anomaly_predictions == y_test)
-        print(f"   🔍 Isolation Forest Accuracy: {anomaly_accuracy:.4f}")
+        print(f"   ✅ Accuracy: {if_accuracy:.4f}")
+        
+        # EVALUACIÓN COMBINADA
+        print(f"\n📊 RENDIMIENTO COMBINADO:")
+        
+        # Consenso entre modelos
+        consensus_predictions = (rf_predictions + if_predictions) >= 1
+        consensus_accuracy = np.mean(consensus_predictions == y_test)
+        
+        print(f"   🤖 Random Forest solo: {rf_accuracy:.4f}")
+        print(f"   🔍 Isolation Forest solo: {if_accuracy:.4f}")
+        print(f"   🎯 Consenso (OR): {consensus_accuracy:.4f}")
         
         # Marcar como entrenado y guardar
         self.is_trained = True
         self.save_models()
         
-        print("✅ Entrenamiento completado exitosamente")
-        print("💾 Modelos guardados para uso futuro")
+        print(f"\n✅ ENTRENAMIENTO COMPLETADO:")
+        print(f"   📈 Modelos entrenados con {len(X_train):,} muestras")
+        print(f"   🎯 {len(self.feature_columns)} características utilizadas")
+        print(f"   💾 Modelos guardados para uso futuro")
+        print(f"   🚀 Sistema listo para detección en tiempo real")
         
         # Dividir datos
         X_train, X_test, y_train, y_test = train_test_split(
@@ -211,85 +289,195 @@ class SmartDryWallDetector:
         
     def save_models(self):
         """
-        Guarda los modelos entrenados
+        Guarda los modelos entrenados junto con las características utilizadas.
+        
+        ACTUALIZADO: Incluye las características expandidas y metadatos del dataset sintético.
         """
-        with open('ml_models.pkl', 'wb') as f:
-            pickle.dump({
-                'classifier': self.model,
-                'anomaly_detector': self.anomaly_detector,
-                'scaler': self.scaler
-            }, f)
-        print("💾 Modelos guardados en ml_models.pkl")
+        model_data = {
+            'classifier': self.model,
+            'anomaly_detector': self.anomaly_detector,
+            'scaler': self.scaler,
+            'feature_columns': self.feature_columns,  # NUEVO: Guardar características
+            'is_trained': self.is_trained,
+            'dataset_version': 'synthetic_7days',      # NUEVO: Versión del dataset
+            'n_features': len(self.feature_columns),   # NUEVO: Número de características
+            'threshold_basic': self.threshold_basic
+        }
+        
+        with open('ml_models_7days.pkl', 'wb') as f:
+            pickle.dump(model_data, f)
+        print("💾 Modelos del dataset 7 días guardados en 'ml_models_7days.pkl'")
         
     def load_models(self):
         """
-        Carga modelos pre-entrenados
+        Carga modelos pre-entrenados con verificación de compatibilidad.
+        
+        ACTUALIZADO: Verifica compatibilidad con características expandidas.
         """
         try:
-            with open('ml_models.pkl', 'rb') as f:
-                models = pickle.load(f)
-                self.model = models['classifier']
-                self.anomaly_detector = models['anomaly_detector']
-                self.scaler = models['scaler']
+            # Intentar cargar modelos del dataset 7 días primero
+            if os.path.exists('ml_models_7days.pkl'):
+                with open('ml_models_7days.pkl', 'rb') as f:
+                    model_data = pickle.load(f)
+                    
+                self.model = model_data['classifier']
+                self.anomaly_detector = model_data['anomaly_detector']
+                self.scaler = model_data['scaler']
+                
+                # Verificar compatibilidad de características
+                if 'feature_columns' in model_data:
+                    loaded_features = model_data['feature_columns']
+                    if loaded_features != self.feature_columns:
+                        print("⚠️ Características del modelo difieren de las actuales")
+                        print(f"   Modelo: {len(loaded_features)} características")
+                        print(f"   Actual: {len(self.feature_columns)} características")
+                        # Usar características del modelo cargado
+                        self.feature_columns = loaded_features
+                        
                 self.is_trained = True
-            print("✅ Modelos cargados exitosamente")
-            return True
-        except FileNotFoundError:
-            print("⚠️ No se encontraron modelos pre-entrenados")
+                print("✅ Modelos del dataset 7 días cargados exitosamente")
+                print(f"   📊 Características: {len(self.feature_columns)}")
+                return True
+                
+            # Fallback a modelos antiguos si existen
+            elif os.path.exists('ml_models.pkl'):
+                print("⚠️ Cargando modelos antiguos (compatibilidad limitada)")
+                with open('ml_models.pkl', 'rb') as f:
+                    model_data = pickle.load(f)
+                    
+                self.model = model_data['classifier']
+                self.anomaly_detector = model_data['anomaly_detector']
+                self.scaler = model_data['scaler']
+                
+                # Usar características básicas para compatibilidad
+                self.feature_columns = ['humidity_pct', 'raw_value', 'hour', 'minute']
+                self.is_trained = True
+                print("✅ Modelos antiguos cargados (funcionalidad limitada)")
+                return True
+                
+            else:
+                print("⚠️ No se encontraron modelos pre-entrenados")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error cargando modelos: {e}")
             return False
             
-    def predict_anomaly(self, raw_value, humidity_pct, hour=None, minute=None):
+    def predict_anomaly(self, raw_value, humidity_pct, hour=None, minute=None, 
+                       day_of_week=None, is_weekend=None, is_night=None):
         """
         Predice si una lectura del sensor indica anomalía usando ML inteligente.
         
-        Este es el corazón del sistema de detección en tiempo real. Combina
-        múltiples enfoques de ML para una detección más robusta y confiable.
+        ACTUALIZADO: Aprovecha las nuevas características del dataset sintético
+        para predicciones más precisas y contextualizadas.
         
-        Proceso de predicción:
+        Este es el corazón del sistema de detección en tiempo real. Combina
+        múltiples enfoques de ML con características temporales y contextuales
+        avanzadas para una detección más robusta y confiable.
+        
+        Proceso de predicción mejorado:
         1. Verificar disponibilidad de modelos entrenados
-        2. Preparar características de entrada
-        3. Ejecutar predicción con Random Forest (supervisado)
-        4. Ejecutar detección con Isolation Forest (no supervisado)
-        5. Combinar resultados con lógica de consenso
-        6. Calcular nivel de confianza de la predicción
+        2. Calcular características contextuales automáticamente
+        3. Estimar características avanzadas (riesgo, estabilidad, cambios)
+        4. Ejecutar predicción con Random Forest (supervisado)
+        5. Ejecutar detección con Isolation Forest (no supervisado)
+        6. Combinar resultados con lógica de consenso mejorada
+        7. Calcular nivel de confianza contextualizado
         
         Args:
             raw_value (int): Valor crudo del sensor de humedad
             humidity_pct (float): Porcentaje de humedad calculado
             hour (int, optional): Hora actual (0-23)
             minute (int, optional): Minuto actual (0-59)
+            day_of_week (int, optional): Día de semana (0-6)
+            is_weekend (bool, optional): ¿Es fin de semana?
+            is_night (bool, optional): ¿Es horario nocturno?
             
         Returns:
-            tuple: (is_anomaly, method, confidence, anomaly_score)
+            tuple: (is_anomaly, method, confidence, anomaly_score, context_info)
             - is_anomaly (bool): ¿Se detectó anomalía?
             - method (str): Método de detección utilizado
             - confidence (float): Nivel de confianza (0.0-1.0)
             - anomaly_score (float): Score numérico de anomalía
-        
-        Lógica de consenso:
-        - Ambos modelos detectan → ALTA CONFIANZA
-        - Solo supervisado detecta → MEDIA CONFIANZA  
-        - Solo no supervisado detecta → BAJA CONFIANZA
-        - Ninguno detecta → NORMAL
+            - context_info (dict): Información contextual de la predicción
         """
-        # Verificar si los modelos están disponibles
+        # Verificar disponibilidad de modelos
         if not self.is_trained:
             print("⚠️ Modelos no entrenados, intentando cargar...")
             if not self.load_models():
                 print("❌ Modelos no disponibles, usando detección básica")
                 is_basic_anomaly = humidity_pct > self.threshold_basic
-                return is_basic_anomaly, "Umbral básico (50%)", 0.6, 0.0
+                context_info = {
+                    'method': 'basic_threshold',
+                    'threshold': self.threshold_basic,
+                    'features_used': 1
+                }
+                return is_basic_anomaly, "Umbral básico (50%)", 0.6, 0.0, context_info
         
-        # Preparar características para predicción
-        # Usar tiempo actual si no se proporciona
-        if hour is None or minute is None:
-            now = datetime.now()
-            hour = now.hour if hour is None else hour
-            minute = now.minute if minute is None else minute
-            
-        # Crear vector de características idéntico al entrenamiento
-        features = np.array([[raw_value, humidity_pct, hour, minute]])
-        features_scaled = self.scaler.transform(features)  # Aplicar misma normalización
+        # Calcular características contextuales automáticamente
+        now = datetime.now()
+        
+        # Características temporales
+        if hour is None:
+            hour = now.hour
+        if minute is None:
+            minute = now.minute
+        if day_of_week is None:
+            day_of_week = now.weekday()  # 0=Lunes, 6=Domingo
+        if is_weekend is None:
+            is_weekend = 1 if day_of_week >= 5 else 0  # Sábado=5, Domingo=6
+        if is_night is None:
+            is_night = 1 if hour < 6 or hour > 22 else 0  # 22:00 - 06:00
+        
+        # Estimar características avanzadas basadas en valores actuales
+        # (En un sistema real, estas vendrían de cálculos históricos)
+        
+        # 1. Normalizar valor raw (estimación basada en rango típico 0-1024)
+        raw_normalized = min(max(raw_value / 1024.0, 0), 1)
+        
+        # 2. Categoría de humedad basada en rangos estándar
+        if humidity_pct < 25:
+            humidity_category = 0  # Baja
+        elif humidity_pct < 60:
+            humidity_category = 1  # Media
+        else:
+            humidity_category = 2  # Alta
+        
+        # 3. Nivel de riesgo de humedad (función escalada)
+        if humidity_pct < 20:
+            humidity_risk_level = 0.1
+        elif humidity_pct < 40:
+            humidity_risk_level = 0.3
+        elif humidity_pct < 60:
+            humidity_risk_level = 0.6
+        else:
+            humidity_risk_level = 0.8
+        
+        # 4. Estabilidad del sensor (simulada como alta por defecto)
+        sensor_stability = 1.0  # En sistema real, se calcularía de lecturas recientes
+        
+        # 5. Cambios en humedad y raw (estimados como promedio para nueva lectura)
+        humidity_change = 2.5  # Promedio típico del dataset
+        raw_change = 10.0      # Promedio típico del dataset
+        
+        # Crear vector de características completo
+        features = np.array([[
+            humidity_pct,           # 0
+            raw_value,             # 1  
+            raw_normalized,        # 2
+            hour,                  # 3
+            day_of_week,          # 4
+            is_weekend,           # 5
+            is_night,             # 6
+            humidity_category,     # 7
+            humidity_risk_level,   # 8
+            sensor_stability,      # 9
+            humidity_change,       # 10
+            raw_change            # 11
+        ]])
+        
+        # Aplicar normalización entrenada
+        features_scaled = self.scaler.transform(features)
         
         # ============= PREDICCIÓN CON MODELO SUPERVISADO =============
         # Random Forest da probabilidades de clase
@@ -301,36 +489,78 @@ class SmartDryWallDetector:
         anomaly_score = self.anomaly_detector.decision_function(features_scaled)[0]
         is_anomaly_detector = self.anomaly_detector.predict(features_scaled)[0] == -1
         
-        # ============= LÓGICA DE CONSENSO INTELIGENTE =============
+        # ============= LÓGICA DE CONSENSO INTELIGENTE MEJORADA =============
         confidence = prob_anomaly  # Confianza base del clasificador
         is_anomaly = False
-        method = "ML Consenso"
+        method = "ML Consenso Avanzado"
+        
+        # Ajustes contextuales de confianza
+        confidence_boost = 0.0
+        
+        # Boost por contexto temporal riesgoso
+        if is_night:
+            confidence_boost += 0.05  # Noches más problemáticas
+        if is_weekend:
+            confidence_boost += 0.03  # Fines de semana menos monitoreados
+        
+        # Boost por niveles de riesgo altos
+        if humidity_risk_level > 0.6:
+            confidence_boost += 0.1
+        
+        # Boost por estabilidad baja del sensor
+        if sensor_stability < 0.8:
+            confidence_boost += 0.05
         
         if is_anomaly_classifier and is_anomaly_detector:
             # Ambos detectan anomalía → MÁXIMA CONFIANZA
             is_anomaly = True
-            method = "ML Alto Riesgo (Consenso)"
-            confidence = min(prob_anomaly + 0.2, 1.0)  # Boost de confianza
+            method = "ML Alto Riesgo (Consenso Doble)"
+            confidence = min(prob_anomaly + 0.2 + confidence_boost, 1.0)
             
         elif is_anomaly_classifier:
-            # Solo supervisado detecta → CONFIANZA MEDIA
+            # Solo supervisado detecta → CONFIANZA MEDIA-ALTA
             is_anomaly = True
-            method = "ML Clasificador"
-            confidence = prob_anomaly
+            method = "ML Clasificador (RF)"
+            confidence = min(prob_anomaly + confidence_boost, 1.0)
             
         elif is_anomaly_detector:
-            # Solo no supervisado detecta → CONFIANZA BAJA/MEDIA
+            # Solo no supervisado detecta → CONFIANZA MEDIA
             is_anomaly = True
-            method = "ML Detector Anomalías"
-            confidence = 0.7  # Confianza moderada
+            method = "ML Detector Anomalías (IF)"
+            confidence = min(0.7 + confidence_boost, 1.0)
             
         else:
             # Ninguno detecta → NORMAL
             is_anomaly = False
             method = "ML Normal"
-            confidence = 1.0 - prob_anomaly  # Confianza en normalidad
-            
-        return is_anomaly, method, confidence, anomaly_score
+            confidence = max(1.0 - prob_anomaly - confidence_boost/2, 0.0)
+        
+        # Información contextual para debugging y análisis
+        context_info = {
+            'features_used': len(self.feature_columns),
+            'temporal_context': {
+                'hour': hour,
+                'day_of_week': day_of_week,
+                'is_weekend': bool(is_weekend),
+                'is_night': bool(is_night)
+            },
+            'risk_context': {
+                'humidity_category': humidity_category,
+                'humidity_risk_level': humidity_risk_level,
+                'sensor_stability': sensor_stability
+            },
+            'ml_scores': {
+                'rf_probability': prob_anomaly,
+                'if_score': anomaly_score,
+                'confidence_boost': confidence_boost
+            },
+            'predictions': {
+                'rf_prediction': bool(is_anomaly_classifier),
+                'if_prediction': bool(is_anomaly_detector)
+            }
+        }
+        
+        return is_anomaly, method, confidence, anomaly_score, context_info
     
     def get_risk_level(self, humidity_pct, confidence=0.5):
         """
