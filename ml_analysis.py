@@ -69,6 +69,16 @@ from sklearn.metrics import silhouette_score, adjusted_rand_score
 
 # Importación opcional de TensorFlow para redes neuronales avanzadas
 # TensorFlow se usa para crear un Autoencoder (red neuronal para detección de anomalías)
+try:
+    import tensorflow as tf  # Framework de deep learning de Google
+    from tensorflow.keras.models import Model  # Para definir arquitecturas de red
+    from tensorflow.keras.layers import Dense, Input  # Capas densas y de entrada
+    TENSORFLOW_AVAILABLE = True
+    print("✅ TensorFlow disponible - Se usarán 10 modelos incluyendo Autoencoder")
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    print("⚠️ TensorFlow no disponible. Se usarán 9 modelos (suficiente para el análisis)")
+    print("💡 Para instalar TensorFlow: pip install tensorflow")
 
 class DryWallAnalyzer:
     """
